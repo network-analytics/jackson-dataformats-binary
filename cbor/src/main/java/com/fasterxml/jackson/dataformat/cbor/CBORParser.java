@@ -7,6 +7,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Stack;
 
 import com.fasterxml.jackson.core.*;
@@ -502,7 +503,7 @@ public class CBORParser extends ParserMinimalBase
 
     protected BigInteger _numberBigInt;
     protected BigDecimal _numberBigDecimal;
-
+    protected HashMap<String,String> m;
     /*
     /**********************************************************
     /* Life-cycle
@@ -512,7 +513,7 @@ public class CBORParser extends ParserMinimalBase
     public CBORParser(IOContext ctxt, int parserFeatures, int cborFeatures,
             ObjectCodec codec, ByteQuadsCanonicalizer sym,
             InputStream in, byte[] inputBuffer, int start, int end,
-            boolean bufferRecyclable)
+            boolean bufferRecyclable, HashMap<String,String> m)
     {
         super(parserFeatures);
         _ioContext = ctxt;
@@ -532,6 +533,7 @@ public class CBORParser extends ParserMinimalBase
 
         _tokenInputRow = -1;
         _tokenInputCol = -1;
+        this.m = m;
     }
 
     @Override
@@ -943,6 +945,7 @@ public class CBORParser extends ParserMinimalBase
                 int len = _decodeExplicitLength(lowBits);
                 createChildObjectContext(len);
             }
+            
             return _currToken;
 
         case 7:
@@ -1029,6 +1032,10 @@ public class CBORParser extends ParserMinimalBase
                         _reportError("String reference index too large");
                     }
                     long l = _decode64Bits();
+                    if (l < 0L) {
+                        System.out.println("invalid SID");
+                    }
+
                     if (neg) {
                         l = -l - 1L;
                     }
@@ -1445,9 +1452,137 @@ public class CBORParser extends ParserMinimalBase
         // otherwise just fall back to default handling; should occur rarely
         return (nextToken() == JsonToken.FIELD_NAME) && str.getValue().equals(getCurrentName());
     }
-
+    
     @Override
     public String nextFieldName() throws IOException
+    {
+        if (_streamReadContext.inObject() && _currToken != JsonToken.FIELD_NAME) {
+            _numTypesValid = NR_UNKNOWN;
+            if (_tokenIncomplete) {
+                _skipIncomplete();
+            }
+            _tokenInputTotal = _currInputProcessed + _inputPtr;
+            _binaryValue = null;
+            _tagValues.clear();
+            // completed the whole Object?
+            if (!_streamReadContext.expectMoreValues()) {
+                _stringRefs.pop();
+                _streamReadContext = _streamReadContext.getParent();
+                _currToken = JsonToken.END_OBJECT;
+                return null;
+            }
+            // inlined "_decodeFieldName()"
+
+            if (_inputPtr >= _inputEnd) {
+                if (!loadMore()) {
+                    _eofAsNextToken();
+                }
+            }
+            int ch = _inputBuffer[_inputPtr++] & 0xFF;
+            int type = (ch >> 5);
+            int lowBits = ch & 0x1F;
+            int max63 = (ch >> 9) & 1;
+
+            // One special case: need to consider tag as prefix first:
+            while (type == 6) {
+                _tagValues.add(_decodeTag(lowBits));
+                if (_inputPtr >= _inputEnd) {
+                    if (!loadMore()) {
+                        _eofAsNextToken();
+                        return null;
+                    }
+                }
+                ch = _inputBuffer[_inputPtr++] & 0xFF;
+                type = (ch >> 5);
+                lowBits = ch & 0x1F;
+                
+            }
+
+            // offline non-String cases, as they are expected to be rare
+            String numberKey="";
+            String actualKey="";
+            boolean skip = false;
+            if (type != CBORConstants.MAJOR_TYPE_TEXT) {
+                if (ch == 0xFF) { // end-of-object, common
+                    if (!_streamReadContext.hasExpectedLength()) {
+                        _stringRefs.pop();
+                        _streamReadContext = _streamReadContext.getParent();
+                        _currToken = JsonToken.END_OBJECT;
+                        return null;
+                    }
+                    _reportUnexpectedBreak();
+                }
+                _decodeNonStringName(ch, _tagValues);
+                _currToken = JsonToken.FIELD_NAME;
+                
+                //SID case
+                if (type == CBORConstants.MAJOR_TYPE_INT_POS) {
+                    if (lowBits == 27) {
+                        numberKey = getText();
+                        actualKey = m.get(numberKey);
+                        if (actualKey == null) {
+                            return numberKey;
+                        }
+                        skip = true;
+                    } else {
+                        return getText();
+                    }
+                }
+                else {
+                    return getText();
+                }
+            }
+            if (!skip) {
+                final int lenMarker = ch & 0x1F;
+                _sharedString = null;
+                String name;
+                boolean chunked = false;
+                if (lenMarker <= 23) {
+                    if (lenMarker == 0) {
+                        name = "";
+                    } else {
+                        if ((_inputEnd - _inputPtr) < lenMarker) {
+                            _loadToHaveAtLeast(lenMarker);
+                        }
+                        if (_symbolsCanonical) {
+                            name = _findDecodedFromSymbols(lenMarker);
+                            if (name != null) {
+                                _inputPtr += lenMarker;
+                            } else {
+                                name = _decodeContiguousName(lenMarker);
+                                name = _addDecodedToSymbols(lenMarker, name);
+                            }
+                        } else {
+                            name = _decodeContiguousName(lenMarker);
+                        }
+                    }
+                } else {
+                    final int actualLen = _decodeExplicitLength(lenMarker);
+                    if (actualLen < 0) {
+                        chunked = true;
+                        name = _decodeChunkedName();
+                    } else {
+                        name = _decodeLongerName(actualLen);
+                    }
+                }
+                if (!chunked && !_stringRefs.empty() &&
+                        shouldReferenceString(_stringRefs.peek().stringRefs.size(), lenMarker)) {
+                    _stringRefs.peek().stringRefs.add(name);
+                    _sharedString = name;
+                }
+                _streamReadContext.setCurrentName(name);
+                _currToken = JsonToken.FIELD_NAME;
+                return (name);
+            }
+            _streamReadContext.setCurrentName(actualKey);
+            _currToken = JsonToken.FIELD_NAME;
+            return (actualKey);
+        }
+        // otherwise just fall back to default handling; should occur rarely
+        return (nextToken() == JsonToken.FIELD_NAME) ? getCurrentName() : null;
+    }
+
+    public String nextFieldName_original() throws IOException
     {
         if (_streamReadContext.inObject() && _currToken != JsonToken.FIELD_NAME) {
             _numTypesValid = NR_UNKNOWN;
@@ -1549,6 +1684,7 @@ public class CBORParser extends ParserMinimalBase
         return (nextToken() == JsonToken.FIELD_NAME) ? getCurrentName() : null;
     }
 
+
     // 06-Apr-2023, tatu: Before Jackson 2.15, we had optimized variant, but
     //    due to sheer complexity this was removed from 2.15 to avoid subtle
     //    bugs (like [dataformats-binary#372]
@@ -1614,6 +1750,7 @@ public class CBORParser extends ParserMinimalBase
             }
         }
         if (t == JsonToken.VALUE_STRING) {
+           
             return _sharedString == null ? _textBuffer.contentsAsString() : _sharedString;
         }
         if (t == null) { // null only before/after document

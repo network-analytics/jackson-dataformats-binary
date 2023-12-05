@@ -2,11 +2,15 @@ package com.fasterxml.jackson.dataformat.cbor;
 
 import java.io.*;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.HashMap;
 
 import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.core.format.InputAccessor;
 import com.fasterxml.jackson.core.format.MatchStrength;
 import com.fasterxml.jackson.core.io.IOContext;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.io.ContentReference;
 
 /**
@@ -60,6 +64,10 @@ public class CBORFactory extends JsonFactory
 
     protected int _formatParserFeatures;
     protected int _formatGeneratorFeatures;
+    protected HashMap<String, String> m;
+    protected static String mapString = "src/main/resources/SID_map.json";
+    protected static File mapFile = new File(mapString);
+    protected static boolean SIDSupport = (mapFile.exists() && !mapFile.isDirectory());
 
     /*
     /**********************************************************
@@ -77,12 +85,18 @@ public class CBORFactory extends JsonFactory
      * and this reuse only works within context of a single
      * factory instance.
      */
-    public CBORFactory() { this((ObjectCodec) null); }
+    public CBORFactory() {
+        
+         this((ObjectCodec) null);
+         System.out.println("factory");
+         m = loadMap();
+        }
 
     public CBORFactory(ObjectCodec oc) {
         super(oc);
         _formatParserFeatures = DEFAULT_CBOR_PARSER_FEATURE_FLAGS;
         _formatGeneratorFeatures = DEFAULT_CBOR_GENERATOR_FEATURE_FLAGS;
+        m = loadMap();
     }
 
     /**
@@ -96,6 +110,7 @@ public class CBORFactory extends JsonFactory
         super(src, oc);
         _formatParserFeatures = src._formatParserFeatures;
         _formatGeneratorFeatures = src._formatGeneratorFeatures;
+        m = loadMap();
     }
 
     /**
@@ -107,7 +122,24 @@ public class CBORFactory extends JsonFactory
         super(b, false);
         _formatParserFeatures = b.formatParserFeaturesMask();
         _formatGeneratorFeatures = b.formatGeneratorFeaturesMask();
+        m = loadMap();
     }
+
+    public static HashMap<String,String> loadMap() {
+            if(SIDSupport) {
+                try {
+                    String SIDString = new String(Files.readAllBytes(Paths.get(mapString)));
+                    HashMap<String,String> m = new ObjectMapper().readValue(SIDString, HashMap.class);
+                    System.out.println(m.get("3"));
+                    return m;
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+            return null;
+
+        }
+
 
     @Override
     public CBORFactoryBuilder rebuild() {
@@ -399,7 +431,7 @@ public class CBORFactory extends JsonFactory
     {
         return new CBORParserBootstrapper(ctxt, in).constructParser(_factoryFeatures,
                 _parserFeatures, _formatParserFeatures,
-                _objectCodec, _byteSymbolCanonicalizer);
+                _objectCodec, _byteSymbolCanonicalizer, m);
     }
 
     /**
@@ -426,7 +458,7 @@ public class CBORFactory extends JsonFactory
     {
         return new CBORParserBootstrapper(ctxt, data, offset, len).constructParser(
                 _factoryFeatures, _parserFeatures, _formatParserFeatures,
-                _objectCodec, _byteSymbolCanonicalizer);
+                _objectCodec, _byteSymbolCanonicalizer, m);
     }
 
     @Override

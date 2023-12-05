@@ -1,6 +1,7 @@
 package com.fasterxml.jackson.dataformat.cbor;
 
 import java.io.*;
+import java.util.HashMap;
 
 import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.core.format.InputAccessor;
@@ -82,7 +83,7 @@ public class CBORParserBootstrapper
 
     public CBORParser constructParser(int factoryFeatures,
             int generalParserFeatures, int formatFeatures,
-            ObjectCodec codec, ByteQuadsCanonicalizer rootByteSymbols)
+            ObjectCodec codec, ByteQuadsCanonicalizer rootByteSymbols, HashMap<String,String> m)
         throws IOException, JsonParseException
     {
         // 13-Mar-2021, tatu: [dataformats-binary#253] Create canonicalizing OR
@@ -92,7 +93,7 @@ public class CBORParserBootstrapper
         ensureLoaded(1);
         CBORParser p = new CBORParser(_context, generalParserFeatures, formatFeatures,
                 codec, can,
-                _in, _inputBuffer, _inputPtr, _inputEnd, _bufferRecyclable);
+                _in, _inputBuffer, _inputPtr, _inputEnd, _bufferRecyclable, m);
         if (_inputPtr < _inputEnd) { // only false for empty doc
             ; // anything we should verify? In future, could verify
         } else {
