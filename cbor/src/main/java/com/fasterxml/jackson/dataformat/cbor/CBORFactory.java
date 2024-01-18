@@ -88,7 +88,6 @@ public class CBORFactory extends JsonFactory
     public CBORFactory() {
         
          this((ObjectCodec) null);
-         System.out.println("factory");
          m = loadMap();
         }
 
@@ -130,7 +129,6 @@ public class CBORFactory extends JsonFactory
                 try {
                     String SIDString = new String(Files.readAllBytes(Paths.get(mapString)));
                     HashMap<String,String> m = new ObjectMapper().readValue(SIDString, HashMap.class);
-                    System.out.println(m.get("3"));
                     return m;
                 } catch (IOException e) {
                     e.printStackTrace();

@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Stack;
+import java.util.LinkedList;
 
 import com.fasterxml.jackson.core.*;
 import com.fasterxml.jackson.core.base.ParserMinimalBase;
@@ -503,7 +504,11 @@ public class CBORParser extends ParserMinimalBase
 
     protected BigInteger _numberBigInt;
     protected BigDecimal _numberBigDecimal;
+    
+    //Yang SID related objects
     protected HashMap<String,String> m;
+    protected LinkedList<Long> parentSIDList = new LinkedList<Long>();
+    protected Long currentSID = 0L;
     /*
     /**********************************************************
     /* Life-cycle
@@ -941,6 +946,7 @@ public class CBORParser extends ParserMinimalBase
         case 5: // Object
             _stringRefs.push(stringrefNamespace);
             _currToken = JsonToken.START_OBJECT;
+            parentSIDList.addFirst(currentSID);
             {
                 int len = _decodeExplicitLength(lowBits);
                 createChildObjectContext(len);
@@ -1032,10 +1038,6 @@ public class CBORParser extends ParserMinimalBase
                         _reportError("String reference index too large");
                     }
                     long l = _decode64Bits();
-                    if (l < 0L) {
-                        System.out.println("invalid SID");
-                    }
-
                     if (neg) {
                         l = -l - 1L;
                     }
@@ -1468,6 +1470,7 @@ public class CBORParser extends ParserMinimalBase
             if (!_streamReadContext.expectMoreValues()) {
                 _stringRefs.pop();
                 _streamReadContext = _streamReadContext.getParent();
+                parentSIDList.removeFirst();
                 _currToken = JsonToken.END_OBJECT;
                 return null;
             }
@@ -1481,11 +1484,11 @@ public class CBORParser extends ParserMinimalBase
             int ch = _inputBuffer[_inputPtr++] & 0xFF;
             int type = (ch >> 5);
             int lowBits = ch & 0x1F;
-            int max63 = (ch >> 9) & 1;
-
             // One special case: need to consider tag as prefix first:
+            int tag = -1;
             while (type == 6) {
-                _tagValues.add(_decodeTag(lowBits));
+                tag = _decodeTag(lowBits);
+                _tagValues.add(tag);
                 if (_inputPtr >= _inputEnd) {
                     if (!loadMore()) {
                         _eofAsNextToken();
@@ -1500,8 +1503,11 @@ public class CBORParser extends ParserMinimalBase
 
             // offline non-String cases, as they are expected to be rare
             String numberKey="";
+            Long key;
+            Long offset;
             String actualKey="";
             boolean skip = false;
+            currentSID = 0L;
             if (type != CBORConstants.MAJOR_TYPE_TEXT) {
                 if (ch == 0xFF) { // end-of-object, common
                     if (!_streamReadContext.hasExpectedLength()) {
@@ -1512,23 +1518,110 @@ public class CBORParser extends ParserMinimalBase
                     }
                     _reportUnexpectedBreak();
                 }
-                _decodeNonStringName(ch, _tagValues);
-                _currToken = JsonToken.FIELD_NAME;
                 
                 //SID case
                 if (type == CBORConstants.MAJOR_TYPE_INT_POS) {
-                    if (lowBits == 27) {
-                        numberKey = getText();
-                        actualKey = m.get(numberKey);
-                        if (actualKey == null) {
-                            return numberKey;
-                        }
-                        skip = true;
+                    if (tag != 43) {
+                        offset = parentSIDList.getFirst();
                     } else {
-                        return getText();
+                        offset = 0L;
                     }
-                }
-                else {
+                    if (lowBits <= 23) {
+                        key = (long)lowBits + offset;
+                    } else {
+                        switch (lowBits) {
+                        case 24:
+                            key = (long)_decode8Bits() + offset;
+                            break;
+                        case 25:
+                            key = (long)_decode16Bits() + offset;
+                            break;
+                        case 26:
+                            key = (long)_decode32Bits() + offset;
+                            if (key < 0) {
+                                _reportError("SID too large");
+                            }
+                            break;
+                        case 27:
+                            {
+                                key = _decode64Bits() + offset;
+                                if (key < 0L) {
+                                    _reportError("SID too large");
+                                }
+
+                            }
+                            break;
+                        default:
+                            throw _constructReadException("Invalid length indicator for ints (%d), token 0x%s",
+                                    lowBits, Integer.toHexString(ch));
+                        }
+                    }
+                    if (key < 0) {
+                                _reportError("Error: negative SID");
+                            }
+                    _currToken = JsonToken.FIELD_NAME;
+                    numberKey = Long.toString(key);
+                    actualKey = m.get(numberKey);
+                    currentSID = key;
+                    if (actualKey == null) {
+                        _streamReadContext.setCurrentName(numberKey);
+                        return numberKey;
+                    }
+                    _streamReadContext.setCurrentName(actualKey);
+                    skip = true;
+                }else if (type == CBORConstants.MAJOR_TYPE_INT_NEG) {
+                    if (tag != 43) {
+                        offset = parentSIDList.getFirst();
+                    } else {
+                        offset = 0L;
+                    }
+                    if (lowBits <= 23) {
+                        key = -(long)lowBits - 1 + offset;
+                    } else {
+                        switch (lowBits) {
+                        case 24:
+                            key = -(long)_decode8Bits() - 1 + offset;
+                            break;
+                        case 25:
+                            key = -(long)_decode16Bits() - 1 + offset;
+                            break;
+                        case 26:
+                            key = -(long)_decode32Bits() - 1 + offset;
+                            if (key < 0) {
+                                _reportError("SID too large");
+                            }
+                            break;
+                        case 27:
+                            {
+                                key = -_decode64Bits() - 1 + offset;
+                                if (key < 0L) {
+                                    _reportError("SID too large");
+                                }
+
+                            }
+                            break;
+                        default:
+                            throw _constructReadException("Invalid length indicator for ints (%d), token 0x%s",
+                                    lowBits, Integer.toHexString(ch));
+                        }
+                    }
+                    if (key < 0) {
+                                _reportError("Error: negative SID");
+                            }
+                    _currToken = JsonToken.FIELD_NAME;
+                    numberKey = Long.toString(key);
+                    actualKey = m.get(numberKey);
+                    currentSID = key;
+                    if (actualKey == null) {
+                        _streamReadContext.setCurrentName(numberKey);
+                        return numberKey;
+                    }
+                    _streamReadContext.setCurrentName(actualKey);
+                    skip = true;
+                    
+                }else {
+                    _decodeNonStringName(ch, _tagValues);
+                    _currToken = JsonToken.FIELD_NAME;
                     return getText();
                 }
             }
@@ -1582,107 +1675,6 @@ public class CBORParser extends ParserMinimalBase
         return (nextToken() == JsonToken.FIELD_NAME) ? getCurrentName() : null;
     }
 
-    public String nextFieldName_original() throws IOException
-    {
-        if (_streamReadContext.inObject() && _currToken != JsonToken.FIELD_NAME) {
-            _numTypesValid = NR_UNKNOWN;
-            if (_tokenIncomplete) {
-                _skipIncomplete();
-            }
-            _tokenInputTotal = _currInputProcessed + _inputPtr;
-            _binaryValue = null;
-            _tagValues.clear();
-            // completed the whole Object?
-            if (!_streamReadContext.expectMoreValues()) {
-                _stringRefs.pop();
-                _streamReadContext = _streamReadContext.getParent();
-                _currToken = JsonToken.END_OBJECT;
-                return null;
-            }
-            // inlined "_decodeFieldName()"
-
-            if (_inputPtr >= _inputEnd) {
-                if (!loadMore()) {
-                    _eofAsNextToken();
-                }
-            }
-            int ch = _inputBuffer[_inputPtr++] & 0xFF;
-            int type = (ch >> 5);
-            int lowBits = ch & 0x1F;
-
-            // One special case: need to consider tag as prefix first:
-            while (type == 6) {
-                _tagValues.add(_decodeTag(lowBits));
-                if (_inputPtr >= _inputEnd) {
-                    if (!loadMore()) {
-                        _eofAsNextToken();
-                        return null;
-                    }
-                }
-                ch = _inputBuffer[_inputPtr++] & 0xFF;
-                type = (ch >> 5);
-                lowBits = ch & 0x1F;
-            }
-
-            // offline non-String cases, as they are expected to be rare
-            if (type != CBORConstants.MAJOR_TYPE_TEXT) {
-                if (ch == 0xFF) { // end-of-object, common
-                    if (!_streamReadContext.hasExpectedLength()) {
-                        _stringRefs.pop();
-                        _streamReadContext = _streamReadContext.getParent();
-                        _currToken = JsonToken.END_OBJECT;
-                        return null;
-                    }
-                    _reportUnexpectedBreak();
-                }
-                _decodeNonStringName(ch, _tagValues);
-                _currToken = JsonToken.FIELD_NAME;
-                return getText();
-            }
-            final int lenMarker = ch & 0x1F;
-            _sharedString = null;
-            String name;
-            boolean chunked = false;
-            if (lenMarker <= 23) {
-                if (lenMarker == 0) {
-                    name = "";
-                } else {
-                    if ((_inputEnd - _inputPtr) < lenMarker) {
-                        _loadToHaveAtLeast(lenMarker);
-                    }
-                    if (_symbolsCanonical) {
-                        name = _findDecodedFromSymbols(lenMarker);
-                        if (name != null) {
-                            _inputPtr += lenMarker;
-                        } else {
-                            name = _decodeContiguousName(lenMarker);
-                            name = _addDecodedToSymbols(lenMarker, name);
-                        }
-                    } else {
-                        name = _decodeContiguousName(lenMarker);
-                    }
-                }
-            } else {
-                final int actualLen = _decodeExplicitLength(lenMarker);
-                if (actualLen < 0) {
-                    chunked = true;
-                    name = _decodeChunkedName();
-                } else {
-                    name = _decodeLongerName(actualLen);
-                }
-            }
-            if (!chunked && !_stringRefs.empty() &&
-                    shouldReferenceString(_stringRefs.peek().stringRefs.size(), lenMarker)) {
-                _stringRefs.peek().stringRefs.add(name);
-                _sharedString = name;
-            }
-            _streamReadContext.setCurrentName(name);
-            _currToken = JsonToken.FIELD_NAME;
-            return name;
-        }
-        // otherwise just fall back to default handling; should occur rarely
-        return (nextToken() == JsonToken.FIELD_NAME) ? getCurrentName() : null;
-    }
 
 
     // 06-Apr-2023, tatu: Before Jackson 2.15, we had optimized variant, but
