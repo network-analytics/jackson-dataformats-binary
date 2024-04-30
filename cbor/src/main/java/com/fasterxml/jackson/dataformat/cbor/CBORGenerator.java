@@ -15,6 +15,7 @@ import com.fasterxml.jackson.core.json.DupDetector;
 import com.fasterxml.jackson.core.util.JacksonFeatureSet;
 
 import static com.fasterxml.jackson.dataformat.cbor.CBORConstants.*;
+import java.util.LinkedList;
 
 /**
  * {@link JsonGenerator} implementation that writes CBOR encoded content.
@@ -278,6 +279,15 @@ public class CBORGenerator extends GeneratorBase
      */
     protected HashMap<Object, Integer> _stringRefs;
 
+     /**
+     * SID related parameters
+     */
+
+
+    protected HashMap<String,String> m;
+    protected LinkedList<Long> parentSIDList = new LinkedList<Long>();
+    protected Long currentSID = 0L;
+
     /*
     /**********************************************************
     /* Life-cycle
@@ -285,7 +295,7 @@ public class CBORGenerator extends GeneratorBase
      */
 
     public CBORGenerator(IOContext ioCtxt, int stdFeatures, int formatFeatures,
-            ObjectCodec codec, OutputStream out) {
+            ObjectCodec codec, OutputStream out, HashMap<String,String> m) {
         super(stdFeatures, codec, ioCtxt, /* Write Context */ null);
         DupDetector dups = JsonGenerator.Feature.STRICT_DUPLICATE_DETECTION.enabledIn(stdFeatures)
                 ? DupDetector.rootDetector(this)
@@ -303,6 +313,7 @@ public class CBORGenerator extends GeneratorBase
         _outputEnd = _outputBuffer.length;
         _charBuffer = ioCtxt.allocConcatBuffer();
         _charBufferLength = _charBuffer.length;
+        this.m = reverseSIDMap(m);
         // let's just sanity check to prevent nasty odd errors
         if (_outputEnd < MIN_BUFFER_LENGTH) {
             throw new IllegalStateException("Internal encoding buffer length ("
@@ -529,7 +540,13 @@ public class CBORGenerator extends GeneratorBase
         if (!_streamWriteContext.writeFieldName(name)) {
             _reportError("Can not write a field name, expecting a value");
         }
-        _writeString(name);
+        //TO DO: only use writenumber if we can cast name to a Long
+        String sid = m.get(name);
+        Long value = Long.parseLong(sid);
+        Long offset = parentSIDList.getFirst();
+        currentSID = value;
+        writeNumber(value-offset);
+        //_writeString(name);
     }
 
     @Override
@@ -642,6 +659,7 @@ public class CBORGenerator extends GeneratorBase
         }
         _currentRemainingElements = INDEFINITE_LENGTH;
         _writeByte(BYTE_OBJECT_INDEFINITE);
+        
     }
 
     @Override
@@ -656,6 +674,7 @@ public class CBORGenerator extends GeneratorBase
         }
         _currentRemainingElements = INDEFINITE_LENGTH;
         _writeByte(BYTE_OBJECT_INDEFINITE);
+        parentSIDList.addFirst(currentSID);
     }
 
     public final void writeStartObject(int elementsToWrite) throws IOException {
@@ -679,6 +698,7 @@ public class CBORGenerator extends GeneratorBase
         }
         closeComplexElement();
         _streamWriteContext = _streamWriteContext.getParent();
+        parentSIDList.removeFirst();
     }
 
     @Override // since 2.8
@@ -1310,7 +1330,8 @@ public class CBORGenerator extends GeneratorBase
     @Override
     protected final void _verifyValueWrite(String typeMsg) throws IOException {
         if (!_streamWriteContext.writeValue()) {
-            _reportError("Can not " + typeMsg + ", expecting field name/id");
+            //maybe check if the number is an SID here, if so bypass the _verifyValueWrite
+            //_reportError("Can not " + typeMsg + ", expecting field name/id");
         }
         // decrementElementsRemainingCount()
         int count = _currentRemainingElements;
@@ -1966,5 +1987,21 @@ surr1, surr2));
 
     protected UnsupportedOperationException _notSupported() {
         return new UnsupportedOperationException();
+    }
+
+
+    /*
+    /**********************************************************
+    /* SID exclusive methods
+    /**********************************************************
+     */
+
+    HashMap<String,String> reverseSIDMap( HashMap<String,String> m) {
+        HashMap<String, String> m_new = new HashMap<String, String>();
+        for(HashMap.Entry<String, String> entry : m.entrySet()){
+            m_new.put(entry.getValue(), entry.getKey());
+        }
+        
+        return m_new;
     }
 }

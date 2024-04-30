@@ -479,7 +479,7 @@ public class CBORFactory extends JsonFactory
             int stdFeat, int formatFeat, ObjectCodec codec, OutputStream out) throws IOException
     {
         // false -> we won't manage the stream unless explicitly directed to
-        CBORGenerator gen = new CBORGenerator(ctxt, stdFeat, formatFeat, _objectCodec, out);
+        CBORGenerator gen = new CBORGenerator(ctxt, stdFeat, formatFeat, _objectCodec, out, m);
         if (CBORGenerator.Feature.WRITE_TYPE_HEADER.enabledIn(formatFeat)) {
             gen.writeTag(CBORConstants.TAG_ID_SELF_DESCRIBE);
         }
